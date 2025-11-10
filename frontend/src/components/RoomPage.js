@@ -1,58 +1,57 @@
 import React, { useEffect, useRef, useState } from "react";
-import { useLocation, useParams } from "react-router-dom";
-import Peer from "simple-peer";
+import { useParams, useLocation } from "react-router-dom";
+import SimplePeer from "simple-peer";
 import { getSocket } from "../utils/socket";
 import "../App.css";
 
 /*
-  RoomPage notes:
-  - Uses simple-peer for P2P streams with socket signaling
-  - Expects ?name=...&mic=true/false&video=true/false in URL
-  - Shows local + remote videos, allows toggling mic/video in-room
+RoomPage:
+- Real camera only (filters out virtual devices)
+- Receives mic/video settings & username from PreviewPage
+- Supports multiple users in same room
+- Has in-room mic/video toggles
+- Generates a shareable preview link
 */
+
+const VIRTUAL_RE = /virtual|vcam|snap|animaze|obs/i;
 
 export default function RoomPage() {
   const { roomId } = useParams();
   const location = useLocation();
   const query = new URLSearchParams(location.search);
-  const name = query.get("name") || "Guest";
+  const userName = query.get("name") || "Guest";
   const initialMic = query.get("mic") === "true";
   const initialVideo = query.get("video") === "true";
 
+  const socket = getSocket();
   const [peers, setPeers] = useState([]); // {id, peer, name}
   const userVideo = useRef();
   const peersRef = useRef([]);
   const [stream, setStream] = useState(null);
   const [micOn, setMicOn] = useState(initialMic);
   const [videoOn, setVideoOn] = useState(initialVideo);
-  const socket = getSocket();
 
+  // 🔹 Initialize local stream + socket logic
   useEffect(() => {
-    // connect to socket already created in utils/socket.js
-    
     socket.connect();
 
-    // obtain local media (prefer real camera)
     let mounted = true;
     const init = async () => {
       try {
-        // permission prompt first so labels are visible
+        // request permission so device labels are visible
         const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         tmp.getTracks().forEach((t) => t.stop());
 
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoInputs = devices.filter((d) => d.kind === "videoinput");
-        const real = videoInputs.find((d) => !/virtual|vcam|snap|animaze|obs/i.test(d.label))?.deviceId;
+        const real = videoInputs.find((d) => !VIRTUAL_RE.test(d.label))?.deviceId;
+
         const constraints = {
           video: real ? { deviceId: { exact: real } } : true,
           audio: true,
         };
 
         const localStream = await navigator.mediaDevices.getUserMedia(constraints);
-
-        // apply initial settings
-        if (localStream.getAudioTracks()[0]) localStream.getAudioTracks()[0].enabled = initialMic;
-        if (localStream.getVideoTracks()[0]) localStream.getVideoTracks()[0].enabled = initialVideo;
 
         if (!mounted) {
           localStream.getTracks().forEach((t) => t.stop());
@@ -62,9 +61,15 @@ export default function RoomPage() {
         setStream(localStream);
         if (userVideo.current) userVideo.current.srcObject = localStream;
 
-        socket.emit("join-room", { roomId, name });
+        // Apply initial mic/video settings
+        const audioTrack = localStream.getAudioTracks()[0];
+        const videoTrack = localStream.getVideoTracks()[0];
+        if (audioTrack) audioTrack.enabled = micOn;
+        if (videoTrack) videoTrack.enabled = videoOn;
 
-        // existing users
+        socket.emit("join-room", { roomId, userName });
+
+        // Handle existing users
         socket.on("all-users", (users) => {
           const peersList = [];
           users.forEach((user) => {
@@ -79,6 +84,7 @@ export default function RoomPage() {
           setPeers(peersList);
         });
 
+        // Handle new user joining
         socket.on("user-joined", (payload) => {
           const peer = addPeer(payload.signal, payload.callerId, localStream);
           peersRef.current.push({
@@ -89,11 +95,13 @@ export default function RoomPage() {
           setPeers((users) => [...users, { id: payload.callerId, peer, name: payload.name }]);
         });
 
+        // Handle signal return
         socket.on("receiving-returned-signal", (payload) => {
           const item = peersRef.current.find((p) => p.peerID === payload.id);
           if (item) item.peer.signal(payload.signal);
         });
 
+        // Handle user leaving
         socket.on("user-left", (id) => {
           const peerObj = peersRef.current.find((p) => p.peerID === id);
           if (peerObj) peerObj.peer.destroy();
@@ -101,7 +109,8 @@ export default function RoomPage() {
           setPeers((prev) => prev.filter((p) => p.id !== id));
         });
       } catch (err) {
-        console.error("Room media/init error:", err);
+        console.error("Room init error:", err);
+        alert("Could not access camera/microphone. Please check permissions.");
       }
     };
 
@@ -119,22 +128,23 @@ export default function RoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // 🔹 Peer connection helpers
   function createPeer(userToSignal, callerId, stream) {
-    const peer = new Peer({
+    const peer = new SimplePeer({
       initiator: true,
       trickle: false,
       stream,
     });
 
     peer.on("signal", (signal) => {
-      socket.emit("sending-signal", { userToSignal, callerId, signal, name });
+      socket.emit("sending-signal", { userToSignal, callerId, signal, name: userName });
     });
 
     return peer;
   }
 
   function addPeer(incomingSignal, callerId, stream) {
-    const peer = new Peer({
+    const peer = new SimplePeer({
       initiator: false,
       trickle: false,
       stream,
@@ -149,32 +159,36 @@ export default function RoomPage() {
     return peer;
   }
 
+  // 🔹 Mic toggle
   const toggleMic = () => {
     if (!stream) return;
-    const t = stream.getAudioTracks()[0];
-    if (t) {
-      t.enabled = !t.enabled;
-      setMicOn(t.enabled);
+    const audioTrack = stream.getAudioTracks()[0];
+    if (audioTrack) {
+      audioTrack.enabled = !audioTrack.enabled;
+      setMicOn(audioTrack.enabled);
     }
   };
 
+  // 🔹 Video toggle
   const toggleVideo = () => {
     if (!stream) return;
-    const t = stream.getVideoTracks()[0];
-    if (t) {
-      t.enabled = !t.enabled;
-      setVideoOn(t.enabled);
+    const videoTrack = stream.getVideoTracks()[0];
+    if (videoTrack) {
+      videoTrack.enabled = !videoTrack.enabled;
+      setVideoOn(videoTrack.enabled);
     }
   };
 
+  // 🔹 Copy preview link
   const copyPreviewLink = () => {
-    navigator.clipboard.writeText(`${window.location.origin}/preview/${roomId}`);
+    const link = `${window.location.origin}/preview/${roomId}`;
+    navigator.clipboard.writeText(link);
     alert("Preview link copied!");
   };
 
   return (
     <div className="room-page">
-      <h2>Room {roomId}</h2>
+      <h2>Room ID: {roomId}</h2>
 
       <div className="share-row">
         <button className="btn" onClick={copyPreviewLink}>
@@ -186,7 +200,7 @@ export default function RoomPage() {
       <div className="videos-grid">
         <div className="video-card">
           <video ref={userVideo} autoPlay playsInline muted className="video" />
-          <div className="name-tag">{name} (You)</div>
+          <div className="name-tag">{userName} (You)</div>
         </div>
 
         {peers.map((p) => (
@@ -196,16 +210,17 @@ export default function RoomPage() {
 
       <div className="controls-row">
         <button className={`btn ${micOn ? "active" : ""}`} onClick={toggleMic}>
-          {micOn ? "Mic On" : "Mic Off"}
+          {micOn ? "🎤 Mic On" : "🔇 Mic Off"}
         </button>
         <button className={`btn ${videoOn ? "active" : ""}`} onClick={toggleVideo}>
-          {videoOn ? "Video On" : "Video Off"}
+          {videoOn ? "📹 Video On" : "📷 Video Off"}
         </button>
       </div>
     </div>
   );
 }
 
+// 🔹 Component for remote user’s video
 function PeerVideo({ peer, name }) {
   const ref = useRef();
 
