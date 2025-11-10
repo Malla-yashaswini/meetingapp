@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Mic, MicOff, Video, VideoOff } from "lucide-react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import socket from "../utils/socket";
 import "../App.css";
@@ -299,8 +300,12 @@ export default function RoomPage() {
       </div>
 
       <div className="controls-bar">
-        <button className={`control-btn ${micOn ? "on" : "off"}`} onClick={toggleMic}>{micOn ? "Mic" : "Mic Off"}</button>
-        <button className={`control-btn ${videoOn ? "on" : "off"}`} onClick={toggleVideo}>{videoOn ? "Video" : "Video Off"}</button>
+        <button onClick={toggleMic} className="control-btn">
+         {micOn ? <Mic size={20}/> : <MicOff size={20} color="red"/>}
+         </button>
+        <button onClick={toggleVideo} className="control-btn">
+         {videoOn ? <Video size={20}/> : <VideoOff size={20} color="red"/>}
+         </button>
         <button className={`control-btn ${screenSharing ? "active" : ""}`} onClick={startScreenShare}>{screenSharing ? "Stop Share" : "Share Screen"}</button>
         <button className="control-btn end" onClick={leaveRoom}>Leave</button>
       </div>

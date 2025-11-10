@@ -70,3 +70,14 @@ html,body,#root { height:100%; margin:0; font-family:Inter,system-ui,Arial; back
   .controls-bar { bottom:12px; }
   .captions-wrapper { bottom:80px; }
 }
+.control-btn {
+  background: white;
+  border: none;
+  margin: 0 10px;
+  cursor: pointer;
+  transition: 0.3s;
+}
+.control-btn:hover {
+  transform: scale(1.1);
+}
+  
