@@ -13,67 +13,72 @@ app.use(express.json());
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // For local dev and Render frontend
-    methods: ["GET", "POST"]
-  }
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
 });
 
-const rooms = {};
+const rooms = {}; // { roomId: [{ socketId, name }, ...] }
 
 io.on("connection", (socket) => {
-  console.log("User connected:", socket.id);
+  console.log("socket connected", socket.id);
 
   socket.on("join-room", ({ roomId, name }) => {
-    if (!rooms[roomId]) {
-      rooms[roomId] = [];
-    }
-
-    const usersInRoom = rooms[roomId];
-    rooms[roomId].push({ id: socket.id, name });
-
-    const otherUsers = usersInRoom.filter((u) => u.id !== socket.id);
+    if (!rooms[roomId]) rooms[roomId] = [];
+    // send existing users to the new user
+    const otherUsers = rooms[roomId].map((u) => ({ socketId: u.socketId, name: u.name }));
     socket.emit("all-users", otherUsers);
 
-    socket.to(roomId).emit("user-joined", { callerId: socket.id, name });
-
+    // notify others
+    rooms[roomId].push({ socketId: socket.id, name: name || "Guest" });
     socket.join(roomId);
-    console.log(`${name} joined room ${roomId}`);
+
+    // tell others new user joined (used to create offers)
+    socket.to(roomId).emit("user-joined", { callerId: socket.id, name: name || "Guest" });
+
+    console.log(`${name} joined ${roomId}`);
   });
 
   socket.on("sending-signal", (payload) => {
+    // payload: { userToSignal, callerId, signal, name }
     io.to(payload.userToSignal).emit("user-joined", {
       signal: payload.signal,
-      callerId: payload.callerId
+      callerId: payload.callerId,
+      name: payload.name,
     });
   });
 
   socket.on("returning-signal", (payload) => {
+    // payload: { signal, callerId }
     io.to(payload.callerId).emit("receiving-returned-signal", {
       signal: payload.signal,
-      id: socket.id
+      id: socket.id,
     });
   });
 
   socket.on("leave-room", (roomId) => {
-    if (rooms[roomId]) {
-      rooms[roomId] = rooms[roomId].filter((u) => u.id !== socket.id);
-      socket.to(roomId).emit("user-left", socket.id);
-    }
-    console.log(`User ${socket.id} left room ${roomId}`);
+    if (!rooms[roomId]) return;
+    rooms[roomId] = rooms[roomId].filter((u) => u.socketId !== socket.id);
+    socket.to(roomId).emit("user-left", socket.id);
+    socket.leave(roomId);
   });
 
   socket.on("disconnect", () => {
-    for (const roomId in rooms) {
-      rooms[roomId] = rooms[roomId].filter((u) => u.id !== socket.id);
-      io.to(roomId).emit("user-left", socket.id);
+    // remove from all rooms
+    for (const r of Object.keys(rooms)) {
+      const before = rooms[r].length;
+      rooms[r] = rooms[r].filter((u) => u.socketId !== socket.id);
+      if (rooms[r].length !== before) {
+        io.to(r).emit("user-left", socket.id);
+      }
     }
-    console.log("User disconnected:", socket.id);
+    console.log("socket disconnected", socket.id);
   });
 });
 
 app.get("/", (req, res) => {
-  res.send("✅ Meet Chat Backend is Running!");
+  res.send("MeetChat backend running");
 });
 
-const PORT = process.env.PORT || 5000;
-server.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+const port = process.env.PORT || 5000;
+server.listen(port, () => console.log("Server listening on", port));
