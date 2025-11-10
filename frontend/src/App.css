@@ -62,3 +62,77 @@ body {
 .muted { color:#666; font-size:12px; margin-top:8px; }
 .error { color: #b91c1c; margin-bottom: 10px; }
 .participants-count { margin-left: 12px; font-weight:600; }
+
+.preview-container, .room-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 100vh;
+  background: #f7f8fa;
+}
+
+.preview-card {
+  background: white;
+  padding: 2rem;
+  border-radius: 20px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+  text-align: center;
+  width: 90%;
+  max-width: 400px;
+}
+
+.preview-video, .video-self {
+  width: 100%;
+  border-radius: 12px;
+  background: black;
+}
+
+.control-buttons {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.btn {
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.btn.on {
+  background: #28a745;
+  color: white;
+}
+
+.btn.off {
+  background: #dc3545;
+  color: white;
+}
+
+.btn.primary {
+  background: #007bff;
+  color: white;
+}
+
+.btn.secondary {
+  background: #6c757d;
+  color: white;
+}
+
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+  width: 90%;
+}
+
+.video-box {
+  background: #000;
+  border-radius: 10px;
+  overflow: hidden;
+  text-align: center;
+  color: white;
+}
