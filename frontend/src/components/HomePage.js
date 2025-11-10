@@ -1,6 +1,6 @@
+// src/pages/HomePage.js
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { v4 as uuidv4 } from "uuid";
 import "../App.css";
 
 export default function HomePage() {
@@ -8,33 +8,35 @@ export default function HomePage() {
   const navigate = useNavigate();
 
   const createRoom = () => {
-    const newRoomId = uuidv4();
-    navigate(`/preview/${newRoomId}`);
+    const newRoom = Math.random().toString(36).substring(2, 9);
+    navigate(`/preview/${newRoom}`);
   };
 
   const joinRoom = () => {
     if (!roomId.trim()) return alert("Enter Room ID");
-    navigate(`/preview/${roomId}`);
+    navigate(`/preview/${roomId.trim()}`);
   };
 
   return (
-    <div className="home-page">
-      <div className="home-card">
-        <h1>Meet Chat</h1>
-        <div className="actions">
-          <button className="btn primary" onClick={createRoom}>
-            Create Room
-          </button>
-          <input
-            className="text-input"
-            placeholder="Enter Room ID"
-            value={roomId}
-            onChange={(e) => setRoomId(e.target.value)}
-          />
-          <button className="btn" onClick={joinRoom}>
-            Join Room
-          </button>
+    <div className="page-center white-bg">
+      <div className="card">
+        <h1 className="title">MeetChat</h1>
+
+        <div className="row">
+          <button className="btn primary" onClick={createRoom}>Create Room</button>
+
+          <div className="join-inline">
+            <input
+              value={roomId}
+              onChange={(e) => setRoomId(e.target.value)}
+              placeholder="Enter Room ID"
+              className="input"
+            />
+            <button className="btn" onClick={joinRoom}>Join</button>
+          </div>
         </div>
+
+        <p className="muted">Create a room and share the preview link with friends.</p>
       </div>
     </div>
   );

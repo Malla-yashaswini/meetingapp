@@ -1,87 +1,348 @@
+// src/pages/RoomPage.js
 import React, { useEffect, useRef, useState } from "react";
-import io from "socket.io-client";
-import Peer from "simple-peer";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import socket from "../utils/socket";
+import "../App.css";
 
-const socket = io("http://localhost:5000");
-const VIRTUAL_RE = /(virtual|snap|obs|xsplit|manycam|camlink|ndi|dummy)/i;
+const VIRTUAL_RE = /(virtual|snap|obs|xsplit|manycam|vcam|animaze|ndi|camlink|dummy)/i;
+const CAPTIONS_LIMIT = 6;
 
-const RoomPage = () => {
-  const videoRef = useRef(null);
-  const [stream, setStream] = useState(null);
-  const [micOn, setMicOn] = useState(true);
-  const [camOn, setCamOn] = useState(true);
+export default function RoomPage() {
+  const { roomId } = useParams();
   const location = useLocation();
-  const name = new URLSearchParams(location.search).get("name");
+  const navigate = useNavigate();
+  const state = location.state || {};
+  const userName = state.name || new URLSearchParams(location.search).get("name") || "Guest";
+  const lang = state.lang || "en-US";
 
-  const initMedia = async () => {
+  const localVideoRef = useRef(null);
+  const pcsRef = useRef({}); // RTCPeerConnection map by id
+  const remoteStreamsRef = useRef({}); // MediaStreams by id
+  const [remotePeers, setRemotePeers] = useState([]); // {id,name}
+  const [localStream, setLocalStream] = useState(null);
+  const [micOn, setMicOn] = useState(state.micOn ?? true);
+  const [videoOn, setVideoOn] = useState(state.videoOn ?? true);
+  const [captions, setCaptions] = useState([]);
+  const [screenSharing, setScreenSharing] = useState(false);
+  const screenStreamRef = useRef(null);
+
+  // choose real camera
+  async function getRealCameraConstraints() {
     try {
-      if (stream) stream.getTracks().forEach((t) => t.stop());
+      // ask for permissions (labels available after permission)
+      const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      tmp.getTracks().forEach((t) => t.stop());
 
       const devices = await navigator.mediaDevices.enumerateDevices();
-      const realCam = devices.find(
-        (d) => d.kind === "videoinput" && !VIRTUAL_RE.test(d.label)
-      );
+      const cams = devices.filter((d) => d.kind === "videoinput");
+      const real = cams.find((c) => !VIRTUAL_RE.test(c.label));
+      if (real) {
+        return { video: { deviceId: { exact: real.deviceId }, width: 1280, height: 720 }, audio: true };
+      }
+      return { video: true, audio: true };
+    } catch (e) {
+      console.warn("getRealCameraConstraints failed:", e);
+      return { video: true, audio: true };
+    }
+  }
 
-      const constraints = {
-        video: realCam
-          ? { deviceId: { exact: realCam.deviceId }, width: 1280, height: 720 }
-          : true,
-        audio: true,
-      };
+  useEffect(() => {
+    let mounted = true;
 
-      const s = await navigator.mediaDevices.getUserMedia(constraints);
+    async function init() {
+      if (socket && !socket.connected) socket.connect();
 
-      const track = s.getVideoTracks()[0];
-      if (VIRTUAL_RE.test(track.label)) {
-        s.getTracks().forEach((t) => t.stop());
-        alert("Virtual camera detected! Please use a real webcam.");
+      const constraints = await getRealCameraConstraints();
+      try {
+        if (localStream) localStream.getTracks().forEach((t) => t.stop());
+        const s = await navigator.mediaDevices.getUserMedia(constraints);
+
+        // If still virtual, try to pick another camera
+        const videoTrack = s.getVideoTracks()[0];
+        if (videoTrack && VIRTUAL_RE.test(videoTrack.label)) {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const cams = devices.filter((d) => d.kind === "videoinput" && !VIRTUAL_RE.test(d.label));
+          if (cams.length) {
+            s.getTracks().forEach((t) => t.stop());
+            const s2 = await navigator.mediaDevices.getUserMedia({
+              video: { deviceId: { exact: cams[0].deviceId }, width: 1280, height: 720 },
+              audio: true,
+            });
+            if (!mounted) { s2.getTracks().forEach((t) => t.stop()); return; }
+            setLocalStream(s2);
+            if (localVideoRef.current) localVideoRef.current.srcObject = s2;
+          } else {
+            console.warn("No alternative real camera found; using current camera");
+            setLocalStream(s);
+            if (localVideoRef.current) localVideoRef.current.srcObject = s;
+          }
+        } else {
+          if (!mounted) { s.getTracks().forEach((t) => t.stop()); return; }
+          setLocalStream(s);
+          if (localVideoRef.current) localVideoRef.current.srcObject = s;
+        }
+
+        // apply initial toggles
+        s.getAudioTracks().forEach((t) => (t.enabled = micOn));
+        s.getVideoTracks().forEach((t) => (t.enabled = videoOn));
+      } catch (err) {
+        console.error("Local media error:", err);
+        alert("Please allow camera & mic and ensure a real webcam is connected.");
         return;
       }
 
-      setStream(s);
-      if (videoRef.current) videoRef.current.srcObject = s;
+      // socket listeners
+      socket.on("update-participants", (participants) => {
+        const others = participants.filter((p) => p.id !== socket.id);
+        setRemotePeers(others);
+      });
 
-      socket.emit("join-room", { name });
-    } catch (err) {
-      console.error("Camera init error:", err);
-      alert("Camera/mic access failed. Please allow permissions.");
+      socket.on("offer", async ({ sdp, caller }) => {
+        await handleReceiveOffer(caller, sdp);
+      });
+
+      socket.on("answer", async ({ sdp, callee }) => {
+        await handleReceiveAnswer(callee, sdp);
+      });
+
+      socket.on("ice-candidate", async ({ candidate, from }) => {
+        const pc = pcsRef.current[from];
+        if (pc && candidate) {
+          try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) { console.warn(e); }
+        }
+      });
+
+      socket.on("user-left", (id) => {
+        const pc = pcsRef.current[id];
+        if (pc) { try { pc.close(); } catch{} delete pcsRef.current[id]; }
+        delete remoteStreamsRef.current[id];
+        setRemotePeers((prev) => prev.filter((p) => p.id !== id));
+      });
+
+      socket.on("subtitle", ({ userName: u, text }) => {
+        if (!text || !text.trim()) return;
+        setCaptions((prev) => [...prev.slice(-CAPTIONS_LIMIT + 1), { userName: u, text }]);
+      });
+
+      // announce join
+      socket.emit("join-room", { roomId, userName });
     }
-  };
 
-  useEffect(() => {
-    initMedia();
+    init();
+
     return () => {
-      if (stream) stream.getTracks().forEach((t) => t.stop());
+      mounted = false;
+      socket.off("update-participants");
+      socket.off("offer");
+      socket.off("answer");
+      socket.off("ice-candidate");
+      socket.off("user-left");
+      socket.off("subtitle");
+      Object.values(pcsRef.current).forEach((pc) => { try { pc.close(); } catch {} });
+      pcsRef.current = {};
+      if (localStream) localStream.getTracks().forEach((t) => t.stop());
+      if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach((t) => t.stop());
     };
-    // eslint-disable-next-line
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId]);
 
+  // Create peer & offer
+  const createPeerAndOffer = async (targetId) => {
+    if (!localStream) return;
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+    // add tracks
+    localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
+
+    // handle inbound tracks
+    const inbound = new MediaStream();
+    pc.ontrack = (e) => {
+      e.streams[0].getTracks().forEach((t) => inbound.addTrack(t));
+      remoteStreamsRef.current[targetId] = inbound;
+      setRemotePeers((prev) => (!prev.find((p) => p.id === targetId) ? [...prev, { id: targetId, name: "Participant" }] : prev));
+    };
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) socket.emit("ice-candidate", { target: targetId, candidate: event.candidate, from: socket.id });
+    };
+
+    pcsRef.current[targetId] = pc;
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit("offer", { target: targetId, sdp: offer, caller: socket.id });
+  };
+
+  const handleReceiveOffer = async (callerId, sdp) => {
+    if (pcsRef.current[callerId]) return;
+    const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
+
+    if (localStream) localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+
+    const inbound = new MediaStream();
+    pc.ontrack = (e) => {
+      e.streams[0].getTracks().forEach((t) => inbound.addTrack(t));
+      remoteStreamsRef.current[callerId] = inbound;
+      setRemotePeers((prev) => (!prev.find((p) => p.id === callerId) ? [...prev, { id: callerId, name: "Participant" }] : prev));
+    };
+
+    pc.onicecandidate = (event) => {
+      if (event.candidate) socket.emit("ice-candidate", { target: callerId, candidate: event.candidate, from: socket.id });
+    };
+
+    pcsRef.current[callerId] = pc;
+
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      socket.emit("answer", { target: callerId, sdp: answer, callee: socket.id });
+    } catch (err) {
+      console.error("handleReceiveOffer error:", err);
+    }
+  };
+
+  const handleReceiveAnswer = async (calleeId, sdp) => {
+    const pc = pcsRef.current[calleeId];
+    if (!pc) return;
+    try { await pc.setRemoteDescription(new RTCSessionDescription(sdp)); } catch (e) { console.warn(e); }
+  };
+
+  // connect to new peers when remotePeers updates
+  useEffect(() => {
+    const toConnect = remotePeers.map((p) => p.id).filter((id) => id !== socket.id && !pcsRef.current[id]);
+    toConnect.forEach((id) => createPeerAndOffer(id).catch((e) => console.error(e)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remotePeers, localStream]);
+
+  // Toggle mic/video
   const toggleMic = () => {
-    if (stream) {
-      stream.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
-      setMicOn(!micOn);
+    if (!localStream) return;
+    const t = localStream.getAudioTracks()[0];
+    if (t) { t.enabled = !t.enabled; setMicOn(t.enabled); }
+  };
+  const toggleVideo = () => {
+    if (!localStream) return;
+    const t = localStream.getVideoTracks()[0];
+    if (t) { t.enabled = !t.enabled; setVideoOn(t.enabled); }
+  };
+
+  // Screen share
+  const startScreenShare = async () => {
+    if (screenSharing) { stopScreenShare(); return; }
+    if (!navigator.mediaDevices.getDisplayMedia) return alert("Screen share not supported.");
+    try {
+      const s = await navigator.mediaDevices.getDisplayMedia({ video: true });
+      screenStreamRef.current = s;
+      const screenTrack = s.getVideoTracks()[0];
+      if (localVideoRef.current) localVideoRef.current.srcObject = s;
+      // replace sender track on each pc
+      Object.values(pcsRef.current).forEach((pc) => {
+        const sender = pc.getSenders().find((sdr) => sdr.track && sdr.track.kind === "video");
+        if (sender) sender.replaceTrack(screenTrack).catch((e) => console.warn(e));
+      });
+      setScreenSharing(true);
+      screenTrack.onended = () => stopScreenShare();
+    } catch (e) {
+      console.error("startScreenShare error", e);
     }
   };
 
-  const toggleCam = () => {
-    if (stream) {
-      stream.getVideoTracks().forEach((t) => (t.enabled = !t.enabled));
-      setCamOn(!camOn);
+  const stopScreenShare = () => {
+    if (localStream && localVideoRef.current) localVideoRef.current.srcObject = localStream;
+    const originalTrack = localStream?.getVideoTracks()[0];
+    if (originalTrack) {
+      Object.values(pcsRef.current).forEach((pc) => {
+        const sender = pc.getSenders().find((sdr) => sdr.track && sdr.track.kind === "video");
+        if (sender) sender.replaceTrack(originalTrack).catch((e) => console.warn(e));
+      });
     }
+    if (screenStreamRef.current) { screenStreamRef.current.getTracks().forEach((t) => t.stop()); screenStreamRef.current = null; }
+    setScreenSharing(false);
   };
+
+  // Speech recognition
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) { console.warn("SpeechRecognition not supported"); return; }
+    const recog = new SpeechRecognition();
+    recog.continuous = true;
+    recog.interimResults = true;
+    recog.lang = lang;
+
+    recog.onresult = (event) => {
+      let transcript = "";
+      for (let i = event.resultIndex; i < event.results.length; ++i) transcript += event.results[i][0].transcript;
+      socket.emit("subtitle", { roomId, text: transcript, userName });
+      setCaptions((prev) => [...prev.slice(-CAPTIONS_LIMIT + 1), { userName, text: transcript }]);
+    };
+
+    recog.onerror = (e) => console.warn("SpeechRecognition error", e);
+    try { recog.start(); } catch (e) {}
+    return () => { try { recog.stop(); } catch (e) {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [roomId, userName, lang]);
+
+  // leave
+  const leaveRoom = () => {
+    socket.emit("leave-room", { roomId });
+    Object.values(pcsRef.current).forEach((pc) => { try { pc.close(); } catch {} });
+    pcsRef.current = {};
+    if (localStream) localStream.getTracks().forEach((t) => t.stop());
+    if (screenStreamRef.current) screenStreamRef.current.getTracks().forEach((t) => t.stop());
+    navigate("/");
+  };
+
+  const getRemoteStream = (id) => remoteStreamsRef.current[id] || null;
 
   return (
-    <div className="room-container">
-      <div className="video-wrapper">
-        <video ref={videoRef} autoPlay playsInline muted className="room-video" />
+    <div className="room-container white-bg">
+      <div className="room-header">
+        <div className="left">
+          <h3>Room: {roomId}</h3>
+        </div>
+        <div className="right">
+          <div className="participants">Participants: {remotePeers.length + 1}</div>
+        </div>
       </div>
-      <div className="controls">
-        <button onClick={toggleMic}>{micOn ? "Mute Mic" : "Unmute Mic"}</button>
-        <button onClick={toggleCam}>{camOn ? "Turn Off Cam" : "Turn On Cam"}</button>
+
+      <div className="video-grid">
+        <div className="video-tile">
+          <video ref={localVideoRef} autoPlay playsInline muted className="video-element" />
+          <div className="name-tag">{userName} (You){screenSharing ? " • presenting" : ""}</div>
+        </div>
+
+        {remotePeers.map((p) => {
+          const stream = getRemoteStream(p.id);
+          return <RemoteVideoTile key={p.id} id={p.id} name={p.name} stream={stream} />;
+        })}
+      </div>
+
+      <div className="captions-wrapper">
+        {captions.slice(-3).map((c, i) => (
+          <div className="caption-line" key={i}><strong>{c.userName}:</strong> {c.text}</div>
+        ))}
+      </div>
+
+      <div className="controls-bar">
+        <button className={`control-btn ${micOn ? "on" : "off"}`} onClick={toggleMic}>{micOn ? "Mic" : "Mic Off"}</button>
+        <button className={`control-btn ${videoOn ? "on" : "off"}`} onClick={toggleVideo}>{videoOn ? "Video" : "Video Off"}</button>
+        <button className={`control-btn ${screenSharing ? "active" : ""}`} onClick={startScreenShare}>{screenSharing ? "Stop Share" : "Share Screen"}</button>
+        <button className="control-btn end" onClick={leaveRoom}>Leave</button>
       </div>
     </div>
   );
-};
+}
 
-export default RoomPage;
+function RemoteVideoTile({ id, name, stream }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current && stream) ref.current.srcObject = stream;
+  }, [stream]);
+  return (
+    <div className="video-tile">
+      <video ref={ref} autoPlay playsInline className="video-element" />
+      <div className="name-tag">{name}</div>
+    </div>
+  );
+}
