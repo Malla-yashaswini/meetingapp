@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useParams } from "react-router-dom";
 import Peer from "simple-peer";
-import { socket } from "../utils/socket";
+import { getSocket } from "../utils/socket";
 import "../App.css";
 
 /*
@@ -25,9 +25,11 @@ export default function RoomPage() {
   const [stream, setStream] = useState(null);
   const [micOn, setMicOn] = useState(initialMic);
   const [videoOn, setVideoOn] = useState(initialVideo);
+  const socket = getSocket();
 
   useEffect(() => {
     // connect to socket already created in utils/socket.js
+    
     socket.connect();
 
     // obtain local media (prefer real camera)

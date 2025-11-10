@@ -1,14 +1,12 @@
+// src/utils/socket.js
 import { io } from "socket.io-client";
 
-let socket;
+// Use your backend Render URL here
+const BACKEND_URL = "https://meetingapp-backend.onrender.com";
 
-export const connectSocket = () => {
-  if (!socket) {
-    socket = io("https://meetingapp-8q7o.onrender.com", {
-      transports: ["websocket"],
-    });
-  }
-  return socket;
-};
+const socket = io(BACKEND_URL, {
+  autoConnect: false,
+  transports: ["websocket"],
+});
 
 export const getSocket = () => socket;
