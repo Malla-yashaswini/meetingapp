@@ -1,117 +1,98 @@
-// src/components/PreviewPage.js
 import React, { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import "../App.css";
+import { useNavigate } from "react-router-dom";
 
-const VIRTUAL_RE = /virtual|vcam|obs|snap|animaze|nvidia|mmhmm/i;
+const VIRTUAL_RE = /(virtual|snap|obs|xsplit|manycam|camlink|ndi|dummy)/i;
 
-export default function PreviewPage() {
-  const { roomId } = useParams();
-  const navigate = useNavigate();
+const PreviewPage = () => {
   const videoRef = useRef(null);
-  const [name, setName] = useState("");
-  const [micOn, setMicOn] = useState(true);
-  const [videoOn, setVideoOn] = useState(true);
   const [stream, setStream] = useState(null);
-  const [error, setError] = useState("");
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(true);
+  const [name, setName] = useState("");
+  const navigate = useNavigate();
 
-  // pick real camera
-  useEffect(() => {
-    let mounted = true;
-    let localStream;
+  const initMedia = async () => {
+    try {
+      // Stop any previous camera stream
+      if (stream) stream.getTracks().forEach((t) => t.stop());
 
-    const init = async () => {
-      try {
-        const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-        tmp.getTracks().forEach((t) => t.stop());
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const realCam = devices.find(
+        (d) => d.kind === "videoinput" && !VIRTUAL_RE.test(d.label)
+      );
 
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const realCam = devices.find(
-          (d) => d.kind === "videoinput" && !VIRTUAL_RE.test(d.label)
-        );
+      const constraints = {
+        video: realCam
+          ? { deviceId: { exact: realCam.deviceId }, width: 1280, height: 720 }
+          : true,
+        audio: true,
+      };
 
-        localStream = await navigator.mediaDevices.getUserMedia({
-          video: realCam ? { deviceId: { exact: realCam.deviceId } } : true,
-          audio: true,
-        });
+      const s = await navigator.mediaDevices.getUserMedia(constraints);
 
-        if (!mounted) return;
-        setStream(localStream);
-        if (videoRef.current) videoRef.current.srcObject = localStream;
-      } catch (err) {
-        console.error("Camera access error:", err);
-        setError("Could not access camera/mic. Please check permissions.");
+      // Double-check it's not virtual
+      const track = s.getVideoTracks()[0];
+      if (VIRTUAL_RE.test(track.label)) {
+        s.getTracks().forEach((t) => t.stop());
+        alert("Virtual camera detected! Please use a real webcam.");
+        return;
       }
-    };
 
-    init();
-    return () => {
-      mounted = false;
-      if (localStream) localStream.getTracks().forEach((t) => t.stop());
-    };
-  }, []);
-
-  // toggle mic/video
-  useEffect(() => {
-    if (!stream) return;
-    stream.getAudioTracks().forEach((t) => (t.enabled = micOn));
-    stream.getVideoTracks().forEach((t) => (t.enabled = videoOn));
-  }, [micOn, videoOn, stream]);
-
-  const joinRoom = () => {
-    if (!name.trim()) return alert("Please enter your name");
-    const qs = `?name=${encodeURIComponent(name)}&mic=${micOn}&video=${videoOn}`;
-    navigate(`/room/${roomId}${qs}`);
+      setStream(s);
+      if (videoRef.current) videoRef.current.srcObject = s;
+    } catch (e) {
+      console.error("Camera init error:", e);
+      alert("Camera access failed. Please allow camera/mic permissions.");
+    }
   };
 
-  const copyRoomLink = () => {
-    const link = `${window.location.origin}/preview/${roomId}`;
-    navigator.clipboard.writeText(link);
-    alert("Room link copied!");
+  useEffect(() => {
+    initMedia();
+    return () => {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+    // eslint-disable-next-line
+  }, []);
+
+  const toggleMic = () => {
+    if (stream) {
+      stream.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
+      setMicOn(!micOn);
+    }
+  };
+
+  const toggleCam = () => {
+    if (stream) {
+      stream.getVideoTracks().forEach((t) => (t.enabled = !t.enabled));
+      setCamOn(!camOn);
+    }
+  };
+
+  const joinRoom = () => {
+    if (!name.trim()) return alert("Enter your name");
+    navigate(`/room?name=${encodeURIComponent(name)}`);
   };
 
   return (
     <div className="preview-container">
-      <div className="preview-card">
-        <h2>Meeting Preview</h2>
-
-        {error && <p className="error">{error}</p>}
-
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className={`preview-video ${!videoOn ? "hidden" : ""}`}
-        />
-        {!videoOn && <div className="video-off-msg">Camera Off</div>}
-
-        <div className="control-buttons">
-          <button onClick={() => setMicOn((m) => !m)} className={`btn ${micOn ? "on" : "off"}`}>
-            {micOn ? "Mic On" : "Mic Off"}
-          </button>
-          <button onClick={() => setVideoOn((v) => !v)} className={`btn ${videoOn ? "on" : "off"}`}>
-            {videoOn ? "Video On" : "Video Off"}
-          </button>
-        </div>
-
+      <div className="video-preview">
+        <video ref={videoRef} autoPlay playsInline muted className="preview-video" />
+      </div>
+      <div className="controls">
         <input
-          className="name-input"
           type="text"
           placeholder="Enter your name"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
-
-        <div className="actions">
-          <button className="btn primary" onClick={joinRoom}>
-            Join Room
-          </button>
-          <button className="btn secondary" onClick={copyRoomLink}>
-            Copy Room Link
-          </button>
+        <div className="buttons">
+          <button onClick={toggleMic}>{micOn ? "Mute Mic" : "Unmute Mic"}</button>
+          <button onClick={toggleCam}>{camOn ? "Turn Off Cam" : "Turn On Cam"}</button>
         </div>
+        <button onClick={joinRoom} className="join-btn">Join Room</button>
       </div>
     </div>
   );
-}
+};
+
+export default PreviewPage;

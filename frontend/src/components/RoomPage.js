@@ -1,86 +1,87 @@
-// src/components/RoomPage.js
 import React, { useEffect, useRef, useState } from "react";
-import { useParams, useLocation } from "react-router-dom";
-import { io } from "socket.io-client";
+import io from "socket.io-client";
 import Peer from "simple-peer";
-import "../App.css";
+import { useLocation } from "react-router-dom";
 
-const socket = io("https://meetingapp-backend.onrender.com"); // your deployed backend URL
-const VIRTUAL_RE = /virtual|vcam|obs|snap|animaze|nvidia|mmhmm/i;
+const socket = io("http://localhost:5000");
+const VIRTUAL_RE = /(virtual|snap|obs|xsplit|manycam|camlink|ndi|dummy)/i;
 
-export default function RoomPage() {
-  const { roomId } = useParams();
-  const { search } = useLocation();
-  const query = new URLSearchParams(search);
-  const name = query.get("name") || "Guest";
-  const mic = query.get("mic") === "true";
-  const video = query.get("video") === "true";
-
-  const [peers, setPeers] = useState([]);
-  const [stream, setStream] = useState(null);
-  const [micOn, setMicOn] = useState(mic);
-  const [videoOn, setVideoOn] = useState(video);
+const RoomPage = () => {
   const videoRef = useRef(null);
-  const peersRef = useRef({});
+  const [stream, setStream] = useState(null);
+  const [micOn, setMicOn] = useState(true);
+  const [camOn, setCamOn] = useState(true);
+  const location = useLocation();
+  const name = new URLSearchParams(location.search).get("name");
 
-  // get real camera
-  useEffect(() => {
-    const initMedia = async () => {
-      try {
-        const tmp = await navigator.mediaDevices.getUserMedia({ video: true });
-        tmp.getTracks().forEach((t) => t.stop());
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const realCam = devices.find(
-          (d) => d.kind === "videoinput" && !VIRTUAL_RE.test(d.label)
-        );
-        const s = await navigator.mediaDevices.getUserMedia({
-          video: realCam ? { deviceId: { exact: realCam.deviceId } } : true,
-          audio: true,
-        });
-        setStream(s);
-        if (videoRef.current) videoRef.current.srcObject = s;
-        socket.emit("join-room", { roomId, name });
-      } catch (e) {
-        console.error(e);
+  const initMedia = async () => {
+    try {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const realCam = devices.find(
+        (d) => d.kind === "videoinput" && !VIRTUAL_RE.test(d.label)
+      );
+
+      const constraints = {
+        video: realCam
+          ? { deviceId: { exact: realCam.deviceId }, width: 1280, height: 720 }
+          : true,
+        audio: true,
+      };
+
+      const s = await navigator.mediaDevices.getUserMedia(constraints);
+
+      const track = s.getVideoTracks()[0];
+      if (VIRTUAL_RE.test(track.label)) {
+        s.getTracks().forEach((t) => t.stop());
+        alert("Virtual camera detected! Please use a real webcam.");
+        return;
       }
-    };
-    initMedia();
-    return () => stream?.getTracks().forEach((t) => t.stop());
-  }, [roomId]);
 
-  // handle mic/video toggles
+      setStream(s);
+      if (videoRef.current) videoRef.current.srcObject = s;
+
+      socket.emit("join-room", { name });
+    } catch (err) {
+      console.error("Camera init error:", err);
+      alert("Camera/mic access failed. Please allow permissions.");
+    }
+  };
+
   useEffect(() => {
-    if (!stream) return;
-    stream.getAudioTracks().forEach((t) => (t.enabled = micOn));
-    stream.getVideoTracks().forEach((t) => (t.enabled = videoOn));
-  }, [micOn, videoOn, stream]);
+    initMedia();
+    return () => {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+    // eslint-disable-next-line
+  }, []);
+
+  const toggleMic = () => {
+    if (stream) {
+      stream.getAudioTracks().forEach((t) => (t.enabled = !t.enabled));
+      setMicOn(!micOn);
+    }
+  };
+
+  const toggleCam = () => {
+    if (stream) {
+      stream.getVideoTracks().forEach((t) => (t.enabled = !t.enabled));
+      setCamOn(!camOn);
+    }
+  };
 
   return (
     <div className="room-container">
-      <h3>Room ID: {roomId}</h3>
-
-      <div className="video-grid">
-        <div className="video-box">
-          <video ref={videoRef} autoPlay muted playsInline className="video-self" />
-          <p>{name} (You)</p>
-        </div>
-
-        {peers.map((peerObj, i) => (
-          <div key={i} className="video-box">
-            <video ref={(ref) => (peerObj.ref = ref)} autoPlay playsInline />
-            <p>{peerObj.name}</p>
-          </div>
-        ))}
+      <div className="video-wrapper">
+        <video ref={videoRef} autoPlay playsInline muted className="room-video" />
       </div>
-
-      <div className="control-buttons">
-        <button onClick={() => setMicOn((m) => !m)} className={`btn ${micOn ? "on" : "off"}`}>
-          {micOn ? "Mic On" : "Mic Off"}
-        </button>
-        <button onClick={() => setVideoOn((v) => !v)} className={`btn ${videoOn ? "on" : "off"}`}>
-          {videoOn ? "Video On" : "Video Off"}
-        </button>
+      <div className="controls">
+        <button onClick={toggleMic}>{micOn ? "Mute Mic" : "Unmute Mic"}</button>
+        <button onClick={toggleCam}>{camOn ? "Turn Off Cam" : "Turn On Cam"}</button>
       </div>
     </div>
   );
-}
+};
+
+export default RoomPage;
