@@ -1,10 +1,9 @@
-// src/pages/RoomPage.js
 import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import socket from "../utils/socket";
 import "../App.css";
 
-const VIRTUAL_RE = /(virtual|snap|obs|xsplit|manycam|vcam|animaze|ndi|camlink|dummy)/i;
+const VIRTUAL_RE = /(virtual|snap|obs|xsplit|manycam|vcam|animaze|ndi|camlink|dummy|mmhmm)/i;
 const CAPTIONS_LIMIT = 6;
 
 export default function RoomPage() {
@@ -13,12 +12,11 @@ export default function RoomPage() {
   const navigate = useNavigate();
   const state = location.state || {};
   const userName = state.name || new URLSearchParams(location.search).get("name") || "Guest";
-  const lang = state.lang || "en-US";
 
   const localVideoRef = useRef(null);
-  const pcsRef = useRef({}); // RTCPeerConnection map by id
-  const remoteStreamsRef = useRef({}); // MediaStreams by id
-  const [remotePeers, setRemotePeers] = useState([]); // {id,name}
+  const pcsRef = useRef({});
+  const remoteStreamsRef = useRef({});
+  const [remotePeers, setRemotePeers] = useState([]);
   const [localStream, setLocalStream] = useState(null);
   const [micOn, setMicOn] = useState(state.micOn ?? true);
   const [videoOn, setVideoOn] = useState(state.videoOn ?? true);
@@ -26,19 +24,14 @@ export default function RoomPage() {
   const [screenSharing, setScreenSharing] = useState(false);
   const screenStreamRef = useRef(null);
 
-  // choose real camera
   async function getRealCameraConstraints() {
     try {
-      // ask for permissions (labels available after permission)
       const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       tmp.getTracks().forEach((t) => t.stop());
-
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cams = devices.filter((d) => d.kind === "videoinput");
       const real = cams.find((c) => !VIRTUAL_RE.test(c.label));
-      if (real) {
-        return { video: { deviceId: { exact: real.deviceId }, width: 1280, height: 720 }, audio: true };
-      }
+      if (real) return { video: { deviceId: { exact: real.deviceId }, width: 1280, height: 720 }, audio: true };
       return { video: true, audio: true };
     } catch (e) {
       console.warn("getRealCameraConstraints failed:", e);
@@ -57,22 +50,18 @@ export default function RoomPage() {
         if (localStream) localStream.getTracks().forEach((t) => t.stop());
         const s = await navigator.mediaDevices.getUserMedia(constraints);
 
-        // If still virtual, try to pick another camera
         const videoTrack = s.getVideoTracks()[0];
         if (videoTrack && VIRTUAL_RE.test(videoTrack.label)) {
           const devices = await navigator.mediaDevices.enumerateDevices();
           const cams = devices.filter((d) => d.kind === "videoinput" && !VIRTUAL_RE.test(d.label));
           if (cams.length) {
             s.getTracks().forEach((t) => t.stop());
-            const s2 = await navigator.mediaDevices.getUserMedia({
-              video: { deviceId: { exact: cams[0].deviceId }, width: 1280, height: 720 },
-              audio: true,
-            });
+            const s2 = await navigator.mediaDevices.getUserMedia({ video: { deviceId: { exact: cams[0].deviceId }, width: 1280, height: 720 }, audio: true });
             if (!mounted) { s2.getTracks().forEach((t) => t.stop()); return; }
             setLocalStream(s2);
             if (localVideoRef.current) localVideoRef.current.srcObject = s2;
           } else {
-            console.warn("No alternative real camera found; using current camera");
+            console.warn("No non-virtual camera found; using current camera");
             setLocalStream(s);
             if (localVideoRef.current) localVideoRef.current.srcObject = s;
           }
@@ -82,7 +71,6 @@ export default function RoomPage() {
           if (localVideoRef.current) localVideoRef.current.srcObject = s;
         }
 
-        // apply initial toggles
         s.getAudioTracks().forEach((t) => (t.enabled = micOn));
         s.getVideoTracks().forEach((t) => (t.enabled = videoOn));
       } catch (err) {
@@ -114,7 +102,7 @@ export default function RoomPage() {
 
       socket.on("user-left", (id) => {
         const pc = pcsRef.current[id];
-        if (pc) { try { pc.close(); } catch{} delete pcsRef.current[id]; }
+        if (pc) { try { pc.close(); } catch {} delete pcsRef.current[id]; }
         delete remoteStreamsRef.current[id];
         setRemotePeers((prev) => prev.filter((p) => p.id !== id));
       });
@@ -124,7 +112,6 @@ export default function RoomPage() {
         setCaptions((prev) => [...prev.slice(-CAPTIONS_LIMIT + 1), { userName: u, text }]);
       });
 
-      // announce join
       socket.emit("join-room", { roomId, userName });
     }
 
@@ -146,15 +133,12 @@ export default function RoomPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomId]);
 
-  // Create peer & offer
   const createPeerAndOffer = async (targetId) => {
     if (!localStream) return;
     const pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
 
-    // add tracks
     localStream.getTracks().forEach((track) => pc.addTrack(track, localStream));
 
-    // handle inbound tracks
     const inbound = new MediaStream();
     pc.ontrack = (e) => {
       e.streams[0].getTracks().forEach((t) => inbound.addTrack(t));
@@ -208,14 +192,12 @@ export default function RoomPage() {
     try { await pc.setRemoteDescription(new RTCSessionDescription(sdp)); } catch (e) { console.warn(e); }
   };
 
-  // connect to new peers when remotePeers updates
   useEffect(() => {
     const toConnect = remotePeers.map((p) => p.id).filter((id) => id !== socket.id && !pcsRef.current[id]);
     toConnect.forEach((id) => createPeerAndOffer(id).catch((e) => console.error(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remotePeers, localStream]);
 
-  // Toggle mic/video
   const toggleMic = () => {
     if (!localStream) return;
     const t = localStream.getAudioTracks()[0];
@@ -227,7 +209,6 @@ export default function RoomPage() {
     if (t) { t.enabled = !t.enabled; setVideoOn(t.enabled); }
   };
 
-  // Screen share
   const startScreenShare = async () => {
     if (screenSharing) { stopScreenShare(); return; }
     if (!navigator.mediaDevices.getDisplayMedia) return alert("Screen share not supported.");
@@ -236,7 +217,6 @@ export default function RoomPage() {
       screenStreamRef.current = s;
       const screenTrack = s.getVideoTracks()[0];
       if (localVideoRef.current) localVideoRef.current.srcObject = s;
-      // replace sender track on each pc
       Object.values(pcsRef.current).forEach((pc) => {
         const sender = pc.getSenders().find((sdr) => sdr.track && sdr.track.kind === "video");
         if (sender) sender.replaceTrack(screenTrack).catch((e) => console.warn(e));
@@ -261,14 +241,13 @@ export default function RoomPage() {
     setScreenSharing(false);
   };
 
-  // Speech recognition
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) { console.warn("SpeechRecognition not supported"); return; }
     const recog = new SpeechRecognition();
     recog.continuous = true;
     recog.interimResults = true;
-    recog.lang = lang;
+    recog.lang = "en-US";
 
     recog.onresult = (event) => {
       let transcript = "";
@@ -281,9 +260,8 @@ export default function RoomPage() {
     try { recog.start(); } catch (e) {}
     return () => { try { recog.stop(); } catch (e) {} };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomId, userName, lang]);
+  }, [roomId, userName]);
 
-  // leave
   const leaveRoom = () => {
     socket.emit("leave-room", { roomId });
     Object.values(pcsRef.current).forEach((pc) => { try { pc.close(); } catch {} });
@@ -296,17 +274,13 @@ export default function RoomPage() {
   const getRemoteStream = (id) => remoteStreamsRef.current[id] || null;
 
   return (
-    <div className="room-container white-bg">
-      <div className="room-header">
-        <div className="left">
-          <h3>Room: {roomId}</h3>
-        </div>
-        <div className="right">
-          <div className="participants">Participants: {remotePeers.length + 1}</div>
-        </div>
+    <div className="room-container white-bg meeting-container">
+      <div className="room-header" style={{ width: "100%", padding: "8px 16px", boxSizing: "border-box" }}>
+        <div><strong>Room:</strong> {roomId}</div>
+        <div>Participants: {remotePeers.length + 1}</div>
       </div>
 
-      <div className="video-grid">
+      <div className="video-grid" style={{ width: "100%", flex: "1 1 auto" }}>
         <div className="video-tile">
           <video ref={localVideoRef} autoPlay playsInline muted className="video-element" />
           <div className="name-tag">{userName} (You){screenSharing ? " • presenting" : ""}</div>

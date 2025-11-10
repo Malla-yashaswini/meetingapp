@@ -10,7 +10,17 @@
 
 html,body,#root { height:100%; margin:0; font-family:Inter,system-ui,Arial; background:var(--bg); color:#111827; }
 
-.white-bg { background: var(--bg); min-height:100vh; position:relative; }
+/* Container that keeps UI inside 100vh */
+.meeting-container {
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: hidden;
+  background: var(--bg);
+}
 
 /* Center pages */
 .page-center { display:flex; align-items:center; justify-content:center; padding:24px; height:100vh; }
@@ -29,9 +39,9 @@ html,body,#root { height:100%; margin:0; font-family:Inter,system-ui,Arial; back
 .video-placeholder { color:#fff; font-size:18px; }
 
 /* Room layout */
-.room-container { padding:16px; min-height:100vh; box-sizing:border-box; }
+.room-container { padding:16px; min-height:100vh; box-sizing:border-box; width:100%; max-width:1200px; }
 .room-header { display:flex; justify-content:space-between; align-items:center; padding:6px 12px 0 12px; }
-.video-grid { margin-top:12px; display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px; padding:12px; padding-bottom:120px; }
+.video-grid { margin-top:12px; display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:12px; padding:12px; padding-bottom:120px; width:100%; flex:1 1 auto; }
 .video-tile { position:relative; border-radius:12px; overflow:hidden; background:#111827; min-height:160px; display:flex; align-items:center; justify-content:center; }
 .video-element { width:100%; height:100%; object-fit:cover; background:#000; display:block; }
 .name-tag { position:absolute; left:8px; bottom:8px; background:rgba(0,0,0,0.5); color:#fff; padding:4px 8px; border-radius:6px; font-size:13px; }
