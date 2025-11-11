@@ -20,7 +20,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
-    "build": "react-scripts build && cp public/_redirects build/_redirects || (echo Skipping _redirects copy)",
+    "build": "react-scripts build && node -e \"import fs from 'fs';fs.copyFileSync('public/_redirects','build/_redirects');console.log('✅ _redirects copied');\"",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
