@@ -15,21 +15,21 @@ export default function PreviewPage() {
   const [stream, setStream] = useState(null);
   const [error, setError] = useState("");
 
-  // pick a real camera only
+  // ✅ Force real camera selection
   useEffect(() => {
     let mounted = true;
     let active = null;
 
     const init = async () => {
       try {
-        // request any permission to get device labels
+        // request permission to reveal device labels
         const tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         tmp.getTracks().forEach((t) => t.stop());
 
         const devices = await navigator.mediaDevices.enumerateDevices();
         const cams = devices.filter((d) => d.kind === "videoinput");
 
-        // prefer non-virtual camera
+        // filter out virtual cameras
         const real = cams.find((c) => !VIRTUAL_RE.test(c.label));
         const constraints = real
           ? { video: { deviceId: { exact: real.deviceId }, width: 1280, height: 720 }, audio: true }
@@ -58,6 +58,7 @@ export default function PreviewPage() {
     };
   }, [roomId]);
 
+  // toggle mic and video tracks
   useEffect(() => {
     if (!stream) return;
     const audio = stream.getAudioTracks()[0];
@@ -66,16 +67,17 @@ export default function PreviewPage() {
     if (video) video.enabled = videoOn;
   }, [micOn, videoOn, stream]);
 
+  // join the room
   const onJoin = () => {
-    if (!name.trim()) return alert("Enter your name");
-    // pass initial settings via state to RoomPage
+    if (!name.trim()) return alert("Please enter your name before joining.");
     navigate(`/room/${roomId}`, { state: { name: name.trim(), micOn, videoOn } });
   };
 
+  // ✅ Copy correct sharable link — opens preview first
   const copyLink = () => {
     const link = `${window.location.origin}/preview/${roomId}`;
     navigator.clipboard.writeText(link);
-    alert("Preview link copied!");
+    alert("Sharable link copied! Send this link for others to preview & join.");
   };
 
   return (
@@ -86,7 +88,13 @@ export default function PreviewPage() {
         {error && <div className="error">{error}</div>}
 
         <div className="preview-video-wrap">
-          <video ref={videoRef} autoPlay playsInline muted className={`preview-video ${!videoOn ? "hidden" : ""}`} />
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            className={`preview-video ${!videoOn ? "hidden" : ""}`}
+          />
           {!videoOn && <div className="video-placeholder">Camera off</div>}
         </div>
 
@@ -99,14 +107,28 @@ export default function PreviewPage() {
           </button>
         </div>
 
-        <input className="input" placeholder="Your name" value={name} onChange={(e) => setName(e.target.value)} />
+        <input
+          className="input"
+          placeholder="Your name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
 
-        <div className="actions-row" style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 12 }}>
-          <button className="btn primary" onClick={onJoin}>Join Room</button>
-          <button className="btn" onClick={copyLink}>Copy Preview Link</button>
+        <div
+          className="actions-row"
+          style={{ display: "flex", gap: 8, justifyContent: "center", marginTop: 12 }}
+        >
+          <button className="btn primary" onClick={onJoin}>
+            Join Room
+          </button>
+          <button className="btn" onClick={copyLink}>
+            Copy Sharable Link
+          </button>
         </div>
 
-        <small className="muted" style={{ marginTop: 8 }}>Room ID: <code>{roomId}</code></small>
+        <small className="muted" style={{ marginTop: 8 }}>
+          Room ID: <code>{roomId}</code>
+        </small>
       </div>
     </div>
   );
