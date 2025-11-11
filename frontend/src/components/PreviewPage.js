@@ -8,17 +8,15 @@ export default function PreviewPage() {
   const { roomId } = useParams();
   const navigate = useNavigate();
   const videoRef = useRef(null);
-
+  const streamRef = useRef(null);
   const [name, setName] = useState("");
   const [micOn, setMicOn] = useState(true);
   const [videoOn, setVideoOn] = useState(true);
   const [stream, setStream] = useState(null);
   const [error, setError] = useState("");
 
-  // ✅ Force real camera selection
   useEffect(() => {
     let mounted = true;
-    let active = null;
 
     const init = async () => {
       try {
@@ -28,20 +26,18 @@ export default function PreviewPage() {
 
         const devices = await navigator.mediaDevices.enumerateDevices();
         const cams = devices.filter((d) => d.kind === "videoinput");
-
-        // filter out virtual cameras
         const real = cams.find((c) => !VIRTUAL_RE.test(c.label));
         const constraints = real
           ? { video: { deviceId: { exact: real.deviceId }, width: 1280, height: 720 }, audio: true }
           : { video: true, audio: true };
 
-        active = await navigator.mediaDevices.getUserMedia(constraints);
-
+        const active = await navigator.mediaDevices.getUserMedia(constraints);
         if (!mounted) {
           active.getTracks().forEach((t) => t.stop());
           return;
         }
 
+        streamRef.current = active;
         setStream(active);
         if (videoRef.current) videoRef.current.srcObject = active;
         setError("");
@@ -54,11 +50,14 @@ export default function PreviewPage() {
     init();
     return () => {
       mounted = false;
-      if (active) active.getTracks().forEach((t) => t.stop());
+      if (streamRef.current) {
+        try { streamRef.current.getTracks().forEach((t) => t.stop()); } catch {}
+        streamRef.current = null;
+      }
+      setStream(null);
     };
   }, [roomId]);
 
-  // toggle mic and video tracks
   useEffect(() => {
     if (!stream) return;
     const audio = stream.getAudioTracks()[0];
@@ -67,17 +66,20 @@ export default function PreviewPage() {
     if (video) video.enabled = videoOn;
   }, [micOn, videoOn, stream]);
 
-  // join the room
   const onJoin = () => {
     if (!name.trim()) return alert("Please enter your name before joining.");
     navigate(`/room/${roomId}`, { state: { name: name.trim(), micOn, videoOn } });
   };
 
-  // ✅ Copy correct sharable link — opens preview first
-  const copyLink = () => {
-    const link = `${window.location.origin}/preview/${roomId}`;
-    navigator.clipboard.writeText(link);
-    alert("Sharable link copied! Send this link for others to preview & join.");
+  const copyLink = async () => {
+    try {
+      const link = `${window.location.origin}/preview/${roomId}`;
+      await navigator.clipboard.writeText(link);
+      alert("Sharable link copied! Send this link for others to preview & join.");
+    } catch (e) {
+      console.warn("copyLink failed", e);
+      alert("Could not copy link automatically. Please copy the URL from the address bar.");
+    }
   };
 
   return (
